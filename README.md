@@ -4,7 +4,7 @@ False Negative Cancellation for Unsupervised Cross-modal Hashing with Prompt Tun
 ## Environment
 You can use the following command to deploy the environment：  
 ```
-conda create -n myenv --file requirements.txt
+pip install -r requirements.txt
 ```
 
 ## Datasets
