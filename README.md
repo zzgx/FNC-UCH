@@ -4,7 +4,7 @@ False Negative Cancellation for Unsupervised Cross-modal Hashing with Prompt Tun
 ## Environment
 You can use the following command to deploy the environment：  
 ```
-pip install torch==1.13.1+cu116 torchvision==0.14.1+cu116 torchaudio==0.13.1 --extra-index-url https://download.pytorch.org/whl/cu116
+conda create -n myenv --file requirements.txt
 ```
 
 ## Datasets
