@@ -1,6 +1,9 @@
 # FNC-UCH
 False Negative Cancellation for Unsupervised Cross-modal Hashing with Prompt Tuning.
 
+## sample video:
+![Sample Video](visualization.mp4)
+
 ## Environment
 You can use the following command to deploy the environment：  
 ```
