@@ -1,7 +1,7 @@
 # FNC-UCH
 False Negative Cancellation for Unsupervised Cross-modal Hashing with Prompt Tuning.
 
-## Visualization:
+## Visualization
 https://github.com/user-attachments/assets/6c84fe3c-eada-408c-b4d1-7c7830cc7cf5
 
 ## Environment
