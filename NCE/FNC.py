@@ -58,7 +58,7 @@ class FNC(nn.Module):
 
         # memory
         else:
-
+            # cross-modal feature fusion
             fusion1 = (i_A + t_A) / 2.
             fusion2 = (i_A + t_B) / 2.
             fusion3 = (i_B + t_A) / 2.
@@ -79,15 +79,14 @@ class FNC(nn.Module):
 
             final_sim = (sim1 + sim2 + sim3 + sim4) / 4.
 
-
-
             batch_loss = 0.
             for i in range(batchSize):
 
                 sim_column = final_sim[:, i]
 
 
-                sorted_idx = torch.argsort(sim_column, descending=True)  # descending=True 表示从大到小
+                sorted_idx = torch.argsort(sim_column, descending=True)
+
 
 
                 pos_idx = batch_idx[i:i + 1]
@@ -124,10 +123,10 @@ class FNC(nn.Module):
                 neg_samples = neg_samples.sign_()
 
 
+
                 pos_sim = torch.matmul(pos_samples, anchor) / T
                 fnp_sim = torch.matmul(fnp_samples, anchor) / T
                 neg_sim = torch.matmul(neg_samples, anchor) / T
-
 
                 pos_exp = torch.exp(pos_sim)
                 fnp_exp = torch.exp(fnp_sim)
@@ -135,8 +134,9 @@ class FNC(nn.Module):
 
 
 
-                beta_weights = fnp_sim
+                beta_weights = torch.sigmoid(fnp_sim)
                 alpha_weights = 1 - beta_weights
+
 
                 numerator = pos_exp.sum() + (beta_weights * fnp_exp).sum()
                 denominator = neg_exp.sum() + pos_exp.sum()
@@ -144,9 +144,7 @@ class FNC(nn.Module):
 
                 batch_loss += (- torch.log(numerator / denominator) / (1 + len(fnp_samples)))
 
-
             avg_loss = batch_loss / batchSize
-
 
         with torch.no_grad():
             new_feature = (i_A + t_A) / 2.
