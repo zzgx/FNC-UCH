@@ -1,30 +1,43 @@
 import json
 import os
+import pdb
 import random as rn
 import time
 import warnings
-import kornia.augmentation as K
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
-from peft import get_peft_model, PromptTuningConfig, TaskType
+from FlagEmbedding import FlagModel
 from torch.nn.utils import clip_grad_norm_
+from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from transformers import AutoModel, AutoTokenizer
+import clip
 import nets
+from NCE.DER_Buffer import Buffer
 from NCE.FNC import FNC
+from NCE.DistenceNCE import DistenceNCE
+from NCE.NCECriterion import NCESoftmaxLoss
 from src.load_mat import CMDataset
-from utils.EDA import EDA
 from utils.config_v2 import args
+import sys
+import contextlib
+from utils.EDA import EDA
+import kornia.augmentation as K
+import kornia.geometry.transform as KT
+from tqdm import tqdm, trange
+from peft import get_peft_model, PromptTuningConfig, TaskType, LoraConfig
+from thop import profile
 
 matplotlib.use('TkAgg')
 warnings.filterwarnings("ignore")
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 device = 'cuda'
 formatted_time = time.strftime("%Y-%m-%d-%H-%M-%S")
+
 seed = 2025
 print(f'seed={seed}')
 np.random.seed(seed)
@@ -34,6 +47,7 @@ torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 torch.cuda.manual_seed_all(seed)
 cudnn.benchmark = True
+
 device_ids = [0, 1]
 teacher_device_id = [0, 1]
 best_acc = 0
@@ -71,21 +85,34 @@ def main():
             self.fea_net = nets.ImageNet(y_dim=384, bit=args.bit, hiden_layer=2).cuda()
             self.prompt_len = args.prompt_len
             self.hidden_dim = self.dinov2.config.hidden_size
-            self.prompt = nn.Parameter(torch.zeros(1, self.prompt_len, self.hidden_dim))
+            self.prompt = nn.Parameter(
+                torch.zeros(1, self.prompt_len, self.hidden_dim))
 
         def forward(self, x, task):
             if task == 0:
+
                 B = x.size(0)
+
                 patch_embeds = self.dinov2.embeddings(x)
+
+
+                cls_token = patch_embeds[:, :1, :]
+                patch_tokens = patch_embeds[:, 1:, :]
+
+
                 prompt = self.prompt.expand(B, -1, -1)
-                tokens = torch.cat([prompt, patch_embeds], dim=1)
+                tokens = torch.cat([cls_token, prompt, patch_tokens], dim=1)
+
 
                 for blk in self.dinov2.encoder.layer:
                     tokens = blk(tokens)[0]
                 tokens = self.dinov2.layernorm(tokens)
 
-                patch_only = tokens[:, self.prompt_len:, :]
+
+                patch_only = tokens[
+                    :, 1 + self.prompt_len:, :]
                 pooled = patch_only.mean(dim=1)
+
 
                 out = self.fea_net(pooled)
 
@@ -95,19 +122,26 @@ def main():
 
                 self.prompt.requires_grad = False
                 B = x.size(0)
+
+
                 patch_embeds = self.dinov2.embeddings(x)
+                cls_token = patch_embeds[:, :1, :]
+                patch_tokens = patch_embeds[:, 1:, :]
+
                 prompt = self.prompt.expand(B, -1, -1)
-                tokens = torch.cat([prompt, patch_embeds], dim=1)
+                tokens = torch.cat([cls_token, prompt, patch_tokens], dim=1)
+
                 for blk in self.dinov2.encoder.layer:
                     tokens = blk(tokens)[0]
                 tokens = self.dinov2.layernorm(tokens)
-                patch_only = tokens[:, self.prompt_len:, :]
+
+
+                patch_only = tokens[:, 1 + self.prompt_len:, :]
                 prompt_out = patch_only.mean(dim=1)
 
                 fusion_out = (origin_out + prompt_out) / 2.
                 out = self.fea_net(fusion_out)
             return out
-
 
     class TextModel(nn.Module):
         def __init__(self, bit):
@@ -133,20 +167,20 @@ def main():
 
             self.text_fea_net = nets.TextNet(y_dim=384, bit=bit, hiden_layer=2).cuda()
 
+
         def forward(self, sentences, task):
             inputs = self.tokenizer(sentences, padding=True, truncation=True, return_tensors="pt").to(device)
             if task == 0:
 
                 outputs = self.bge(**inputs)
-                prompt_out = outputs.last_hidden_state[:, 0, :]
+                prompt_out = outputs.last_hidden_state[:, 0, :]  # [CLS] 表征
                 out = self.text_fea_net(prompt_out)
             else:
 
                 self.bge.prompt_encoder.default.embedding.weight.requires_grad = False
 
-
                 base_outputs = self.base_model(**inputs)
-                origin_out = base_outputs.last_hidden_state[:, 0, :]
+                origin_out = base_outputs.last_hidden_state[:, 0, :]  # [CLS] 表征
 
 
                 outputs = self.bge(**inputs)
@@ -158,10 +192,11 @@ def main():
 
             return out
 
+
     image_model = ImageModel(bit=args.bit).cuda()
     text_model = TextModel(bit=args.bit).cuda()
 
-    parameters = list(image_model.parameters()) + list(text_model.parameters())
+    parameters = list(image_model.parameters()) + list(text_model.parameters())  # 模型参数
 
     optimizer = torch.optim.Adam(parameters, lr=args.lr, weight_decay=1e-06)
 
@@ -229,9 +264,11 @@ def main():
                         optimizer.zero_grad()
                         back_loss = 0.
 
+
                         idx = [idx.cuda()]
                         images_A = images.to(device)
                         texts_A = list(texts)
+
 
                         # warmup stage
                         if warmup_count > 0:
@@ -463,6 +500,12 @@ def calculate_pr_curve(qB, rB, query_label, retrieval_label):
     R = R.sum(dim=0) / mask
     return P, R
 def plot_pr_curve(P, R, title="Precision-Recall Curve"):
+    """
+    Plot the Precision-Recall curve.
+    :param P: Precision values
+    :param R: Recall values
+    :param title: Title of the plot
+    """
     plt.figure(figsize=(10, 10))
     plt.plot(R, P, marker='o', linestyle='-', color='b', linewidth=2, markersize=6)
     plt.title(title, fontsize=16)
